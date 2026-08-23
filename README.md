@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Shanghainese TTS
 
-## Getting Started
+Type Chinese text, hear it in Shanghainese. A prototype of the P1 MVP —
+text in, audio out, played inline.
 
-First, run the development server:
+## Why Qwen3-TTS
+
+Shanghainese eliminates almost every TTS provider. Of the three that remain,
+Qwen3-TTS is the only hosted one with independently published Wu-dialect
+quality figures, and it holds up best on hard inputs — which is what a public
+text box produces. Full reasoning, benchmark numbers and the alternatives:
+https://claude.ai/code/artifact/85c31eae-f0bb-4462-b2e7-992f995ac732
+
+## Running it
 
 ```bash
+cp .env.example .env.local     # then paste your DashScope key into it
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Without a key the UI loads and the API answers `503` with a clear message,
+rather than failing obscurely.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How the dialect is selected
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+There is no dialect parameter. With Qwen3-TTS the dialect is carried by the
+voice, so asking for Shanghainese means sending `voice: "Jada"` (上海-阿珍).
 
-## Learn More
+**Exactly one Shanghainese voice exists.** That is a real constraint on the
+planned voice picker: speed and format are adjustable, but for Shanghainese
+the voice itself is not a choice. The other voices in `lib/voices.ts` are
+there for A/B comparison while evaluating the engine, not to ship.
 
-To learn more about Next.js, take a look at the following resources:
+## What to listen for
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The preset phrases in the UI are chosen to trigger **tone sandhi** —
+Shanghainese changes a syllable's tone depending on the word it belongs to,
+so getting it wrong yields the wrong word, not merely an accent. Published
+work finds existing systems handle left-dominant sandhi poorly. Single
+characters sound fine everywhere; the multi-syllable phrases are the test.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+If the presets sound wrong, the fix is a text-normalisation step with word
+segmentation before synthesis. That work sits on this side of the API
+whatever engine is used.
 
-## Deploy on Vercel
+## Why the audio is a URL and not bytes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+DashScope answers with a link to the clip rather than the audio itself, and
+this app passes that link straight to the browser. So the audio never travels
+through a serverless function, which matters: Vercel caps a function response
+at roughly 4.5 MB, and a few minutes of speech exceeds that. Proxying the
+bytes would have imposed a length limit that handing over a URL does not.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The trade-off is that the link expires after about 24 hours. It is a playback
+handle, not storage.
+
+## Not done yet
+
+- **Caching.** Every press costs money, including for text synthesised a
+  moment ago. Keying a bucket on a hash of `(text, voice)` makes repeats free
+  and gives the audio a permanent home instead of a 24-hour link. The R2
+  driver in `smart-edu/lib/storage` does this already and lifts across.
+- **Rate limiting.** The endpoint is unauthenticated and spends money. The
+  500-character cap bounds a single request but not the number of requests.
+  An in-memory limiter is useless on serverless — each invocation gets a
+  fresh process — so it needs a durable store, as `smart-edu/lib/rate-limit.ts`
+  found the hard way.
+- **Long text.** No chunking or stitching yet, hence the 500-character cap.
+- **Downloads, speed and pitch controls.** P1 items, not started.
