@@ -102,5 +102,9 @@ export async function synthesize(text: string, voice: string): Promise<Synthesis
     throw new SynthesisError('The speech service returned no audio.', 502);
   }
 
-  return { audioUrl };
+  // DashScope hands back an `http://` OSS link. The same object serves fine
+  // over TLS, and on an https-hosted page the browser blocks the plain-http
+  // one as mixed content — silently, with no error the page can catch. Upgrade
+  // it here so the failure never reaches production.
+  return { audioUrl: audioUrl.replace(/^http:\/\//, 'https://') };
 }
