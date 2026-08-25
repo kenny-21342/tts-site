@@ -67,3 +67,35 @@ handle, not storage.
   found the hard way.
 - **Long text.** No chunking or stitching yet, hence the 500-character cap.
 - **Downloads, speed and pitch controls.** P1 items, not started.
+
+## Speed, pitch, and formats
+
+Qwen3-TTS takes `text`, `voice` and `language_type` — and that is all. There is
+no speed parameter, no pitch parameter, and no format or sample-rate option;
+the API always answers with a 24 kHz mono WAV.
+
+So the speed slider is applied to the `<audio>` element on playback, not
+requested from the API. That makes it instant and free, it re-rates a clip you
+already paid for, and it cannot cost us the Shanghainese voice. `preservesPitch`
+stays on, because a Jada clip pitched up by a rate change is no longer the thing
+being evaluated.
+
+**Pitch is not available at all**, and MP3 would mean encoding in the browser.
+Neither is a gap in this page — they are the engine's shape.
+
+The one escape hatch is `qwen3-tts-instruct-flash`, which takes a
+natural-language `instructions` string ("语速较快，带有明显的上扬语调") to steer
+rate and prosody. It is a different model, it costs a synthesis per change, and
+the docs do not say whether it carries the dialect voices. Worth an experiment
+before relying on it.
+
+## Deployment
+
+Not deployed. Vercel Deployment Protection cannot keep this private on a Hobby
+plan: every project gets a public production `.vercel.app` alias, a new
+project's first deployment is always production, and the API rejects
+`ssoProtection: all` with *"Vercel Authentication is not available on your plan
+for production deployments"*. Since `/api/tts` is unauthenticated and every call
+costs money, a public URL needs the rate limit from the P2 hardening task first.
+
+Run it locally until then.

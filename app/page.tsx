@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_VOICE, VOICES } from '@/lib/voices';
 import { MAX_INPUT_CHARS } from '@/lib/qwen-tts';
 
@@ -25,7 +25,23 @@ export default function Home() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [downloading, setDownloading] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // Playback rate is applied to the element rather than requested from the
+  // API. Qwen3-TTS has no speed parameter — only the `-instruct` variant takes
+  // a natural-language hint, and that is a different model whose support for
+  // the dialect voices is undocumented. Doing it here is free, instant, and
+  // cannot cost us Jada.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.playbackRate = speed;
+    // Keep the formants where they are: a Shanghainese voice pitched up by a
+    // playback-rate change is no longer the thing being evaluated.
+    audio.preservesPitch = true;
+  }, [speed, audioUrl]);
 
   const over = text.length > MAX_INPUT_CHARS;
   const selected = VOICES.find((v) => v.id === voice);
@@ -53,6 +69,30 @@ export default function Home() {
       setError('Could not reach the server.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  /**
+   * The audio lives on a cross-origin OSS URL, so a plain `<a download>` would
+   * navigate to it instead of saving it. Fetching to a blob first is what
+   * makes the filename and the save actually happen.
+   */
+  async function download() {
+    if (!audioUrl) return;
+    setDownloading(true);
+    try {
+      const response = await fetch(audioUrl);
+      if (!response.ok) throw new Error('fetch failed');
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = `${voice}-${text.slice(0, 12)}.wav`;
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      setError('Could not download the clip. The link may have expired — synthesise it again.');
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -129,6 +169,31 @@ export default function Home() {
         )}
       </section>
 
+      <section className="flex flex-col gap-3">
+        <div className="flex items-baseline justify-between">
+          <label htmlFor="speed" className="text-sm font-medium">
+            Playback speed
+          </label>
+          <span className="font-mono text-xs tabular-nums text-neutral-500 dark:text-neutral-400">
+            {speed.toFixed(2)}×
+          </span>
+        </div>
+        <input
+          id="speed"
+          type="range"
+          min={0.5}
+          max={1.5}
+          step={0.05}
+          value={speed}
+          onChange={(event) => setSpeed(Number(event.target.value))}
+          className="w-full accent-emerald-700 dark:accent-emerald-500"
+        />
+        <p className="text-xs text-neutral-500 dark:text-neutral-400">
+          Applied on playback, so it changes the current clip instantly and costs nothing.
+          The engine has no pitch control — that is not a gap in this page.
+        </p>
+      </section>
+
       <button
         type="button"
         onClick={speak}
@@ -152,9 +217,19 @@ export default function Home() {
           {/* Keyed so a new clip replaces the element rather than reusing a
               stale buffered source. */}
           <audio key={audioUrl} ref={audioRef} controls src={audioUrl} className="w-full" />
-          <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            Served directly from Alibaba; the link expires in about 24 hours.
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              Served directly from Alibaba; the link expires in about 24 hours.
+            </p>
+            <button
+              type="button"
+              onClick={download}
+              disabled={downloading}
+              className="shrink-0 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium transition hover:border-emerald-600 hover:text-emerald-700 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-emerald-500 dark:hover:text-emerald-400"
+            >
+              {downloading ? 'Saving…' : 'Download WAV'}
+            </button>
+          </div>
         </section>
       )}
     </main>
