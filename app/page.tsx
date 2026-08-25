@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_VOICE, VOICES } from '@/lib/voices';
-import { MAX_INPUT_CHARS } from '@/lib/qwen-tts';
+import { MAX_TOTAL_CHARS, SYNTHESIS_CHUNK_CHARS } from '@/lib/qwen-tts';
+import { splitForSynthesis } from '@/lib/chunk';
+import { concatWav, WavError } from '@/lib/wav';
 
 /**
  * Phrases chosen to exercise tone sandhi, which is the failure mode worth
@@ -27,6 +29,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [joinedUrl, setJoinedUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Playback rate is applied to the element rather than requested from the
@@ -34,6 +38,8 @@ export default function Home() {
   // a natural-language hint, and that is a different model whose support for
   // the dialect voices is undocumented. Doing it here is free, instant, and
   // cannot cost us Jada.
+  useEffect(() => () => { if (joinedUrl) URL.revokeObjectURL(joinedUrl); }, [joinedUrl]);
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -43,54 +49,90 @@ export default function Home() {
     audio.preservesPitch = true;
   }, [speed, audioUrl]);
 
-  const over = text.length > MAX_INPUT_CHARS;
+  const over = text.length > MAX_TOTAL_CHARS;
+  const chunkCount = splitForSynthesis(text, SYNTHESIS_CHUNK_CHARS).length;
   const selected = VOICES.find((v) => v.id === voice);
 
+  /**
+   * Synthesise, in as many requests as the text needs.
+   *
+   * The split happens here rather than server-side so that progress is real:
+   * each chunk is a round trip the user can watch complete, instead of one
+   * opaque request that either returns after a minute or times out. It also
+   * keeps every individual request inside the function timeout no matter how
+   * long the input is.
+   *
+   * The clips are then joined into one WAV, so what plays and what downloads
+   * is a single file rather than a playlist the user has to sit through in
+   * order.
+   */
   async function speak() {
+    const chunks = splitForSynthesis(text, SYNTHESIS_CHUNK_CHARS);
+    if (chunks.length === 0) return;
+
     setLoading(true);
     setError(null);
     setAudioUrl(null);
+    setJoinedUrl(null);
+    setProgress({ done: 0, total: chunks.length });
+
     try {
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text, voice }),
-      });
-      const body = (await response.json()) as { audioUrl?: string; error?: string };
-      if (!response.ok || !body.audioUrl) {
-        setError(body.error ?? 'Synthesis failed.');
-        return;
+      const clips: ArrayBuffer[] = [];
+
+      // Sequential, not parallel: the chunks of one utterance are cheap to
+      // fire all at once and expensive to get rate-limited on, and a partial
+      // failure halfway through is far easier to report in order.
+      for (const [index, chunk] of chunks.entries()) {
+        const response = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text: chunk, voice }),
+        });
+        const body = (await response.json()) as { audioUrl?: string; error?: string };
+        if (!response.ok || !body.audioUrl) {
+          setError(
+            chunks.length === 1
+              ? body.error ?? 'Synthesis failed.'
+              : `Part ${index + 1} of ${chunks.length} failed: ${body.error ?? 'synthesis failed'}`,
+          );
+          return;
+        }
+
+        const audio = await fetch(body.audioUrl);
+        if (!audio.ok) {
+          setError(`Could not fetch the audio for part ${index + 1}.`);
+          return;
+        }
+        clips.push(await audio.arrayBuffer());
+        setProgress({ done: index + 1, total: chunks.length });
       }
-      setAudioUrl(body.audioUrl);
+
+      const { blob } = concatWav(clips);
+      setJoinedUrl(URL.createObjectURL(blob));
+      setAudioUrl(URL.createObjectURL(blob));
       // The <audio> element is keyed on the URL, so it remounts; play once the
       // browser has had a tick to attach the new source.
       requestAnimationFrame(() => void audioRef.current?.play().catch(() => {}));
-    } catch {
-      setError('Could not reach the server.');
+    } catch (caught) {
+      setError(
+        caught instanceof WavError
+          ? `The parts could not be joined: ${caught.message}`
+          : 'Could not reach the server.',
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  /**
-   * The audio lives on a cross-origin OSS URL, so a plain `<a download>` would
-   * navigate to it instead of saving it. Fetching to a blob first is what
-   * makes the filename and the save actually happen.
-   */
-  async function download() {
-    if (!audioUrl) return;
+  /** Save the joined clip. The blob is already in hand, so this cannot fail. */
+  function download() {
+    if (!joinedUrl) return;
     setDownloading(true);
     try {
-      const response = await fetch(audioUrl);
-      if (!response.ok) throw new Error('fetch failed');
-      const objectUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
-      anchor.href = objectUrl;
+      anchor.href = joinedUrl;
       anchor.download = `${voice}-${text.slice(0, 12)}.wav`;
       anchor.click();
-      URL.revokeObjectURL(objectUrl);
-    } catch {
-      setError('Could not download the clip. The link may have expired — synthesise it again.');
     } finally {
       setDownloading(false);
     }
@@ -123,6 +165,12 @@ export default function Home() {
           className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3.5 py-3 text-lg leading-relaxed outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20 dark:border-neutral-700 dark:bg-neutral-900"
           placeholder="侬好"
         />
+        {over && (
+          <p className="text-xs text-red-600 dark:text-red-400">
+            Too long by {text.length - MAX_TOTAL_CHARS} characters. The cap exists because each part
+            is a separate billed request.
+          </p>
+        )}
         <div className="flex items-baseline justify-between gap-3 text-xs">
           <div className="flex flex-wrap gap-1.5">
             {SANDHI_PROBES.map((phrase) => (
@@ -141,7 +189,8 @@ export default function Home() {
               over ? 'text-red-600 dark:text-red-400' : 'text-neutral-500 dark:text-neutral-400'
             }`}
           >
-            {text.length}/{MAX_INPUT_CHARS}
+            {text.length}/{MAX_TOTAL_CHARS}
+            {chunkCount > 1 && ` · ${chunkCount} parts`}
           </span>
         </div>
       </section>
@@ -200,8 +249,35 @@ export default function Home() {
         disabled={loading || over || text.trim().length === 0}
         className="rounded-lg bg-emerald-700 px-5 py-3 font-medium text-white transition hover:bg-emerald-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-emerald-600 dark:hover:bg-emerald-500"
       >
-        {loading ? 'Synthesising…' : 'Speak'}
+        {loading
+          ? progress && progress.total > 1
+            ? `Synthesising ${progress.done + 1} of ${progress.total}…`
+            : 'Synthesising…'
+          : 'Speak'}
       </button>
+
+      {/* Only shown for text that actually had to be split — a progress bar
+          for a single three-second clip is noise. */}
+      {loading && progress && progress.total > 1 && (
+        <div className="flex flex-col gap-1.5" aria-live="polite">
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={progress.total}
+            aria-valuenow={progress.done}
+            aria-label="Synthesis progress"
+            className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800"
+          >
+            <div
+              className="h-full rounded-full bg-emerald-700 transition-[width] duration-300 dark:bg-emerald-500"
+              style={{ width: `${(progress.done / progress.total) * 100}%` }}
+            />
+          </div>
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">
+            {progress.done} of {progress.total} parts done — they are joined into one clip at the end.
+          </p>
+        </div>
+      )}
 
       {error && (
         <p
@@ -219,7 +295,7 @@ export default function Home() {
           <audio key={audioUrl} ref={audioRef} controls src={audioUrl} className="w-full" />
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              Served directly from Alibaba; the link expires in about 24 hours.
+              {chunkCount > 1 ? `Joined from ${chunkCount} parts.` : 'Synthesised just now.'}
             </p>
             <button
               type="button"

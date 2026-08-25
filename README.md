@@ -89,6 +89,38 @@ rate and prosody. It is a different model, it costs a synthesis per change, and
 the docs do not say whether it carries the dialect voices. Worth an experiment
 before relying on it.
 
+## Long text
+
+Anything past `SYNTHESIS_CHUNK_CHARS` (200) is split, synthesised as separate
+requests, and joined back into one WAV before it plays. The textarea accepts up
+to 4000 characters — twenty parts, so one click can never fire an unbounded
+number of billed requests.
+
+**Why 200 and not the 500 the API allows.** Latency is super-linear in input
+length and noisy. Measured against the Beijing endpoint from Shanghai:
+
+| chars | 50 | 100 | 150 | 200 | 300 | 440 |
+|-------|-----|-----|-----|-----|-----|-----|
+| time  | 3.5s | 4.3s | 6.2s | 7.6s | 11.7s | 19.8s, then 34.4s |
+
+A 440-character chunk hit the 50s request timeout in real use. Chunking to fill
+the cap is what breaks; chunking for the latency is what works.
+
+Cuts are taken at sentence ends where possible, clause commas where not, and
+blind only inside a clause longer than a whole chunk — blind cuts are spread
+evenly rather than greedily, so a trailing 。 never ends up alone in a chunk of
+its own and billed as a synthesis. `lib/chunk.ts`, tested in `tests/`.
+
+The parts are joined by concatenating PCM and writing one header
+(`lib/wav.ts`), not by decoding through the Web Audio API — decoding resamples
+to the AudioContext rate and would hand back something subtly different from
+what was synthesised. Formats are compared across parts rather than assumed;
+joining a 16 kHz clip onto a 24 kHz one would play the tail at the wrong speed.
+
+Requests go one at a time, not in parallel: a partial failure is far easier to
+report in order ("Part 2 of 7 failed"), and firing twenty at once is a good way
+to meet a rate limit.
+
 ## Deployment
 
 Not deployed. Vercel Deployment Protection cannot keep this private on a Hobby

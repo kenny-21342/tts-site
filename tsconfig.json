@@ -18,7 +18,8 @@
         "name": "next"
       }
     ],
-    "paths": {
+    "allowImportingTsExtensions": true,
+      "paths": {
       "@/*": ["./*"]
     }
   },

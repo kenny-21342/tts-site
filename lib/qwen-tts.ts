@@ -21,7 +21,32 @@ const GENERATION_PATH = '/services/aigc/multimodal-generation/generation';
  */
 const REQUEST_TIMEOUT_MS = 50_000;
 
+/** The cap on ONE request to the API — enforced server-side. */
 export const MAX_INPUT_CHARS = 500;
+
+/**
+ * The size long text is split into, which is deliberately well below the
+ * per-request cap.
+ *
+ * Synthesis latency is super-linear in input length and very noisy. Measured
+ * against the Beijing endpoint from Shanghai:
+ *
+ *     50 chars → 3.5s     200 chars →  7.6s
+ *    100 chars → 4.3s     300 chars → 11.7s
+ *    150 chars → 6.2s     440 chars → 19.8s and 34.4s on consecutive tries
+ *
+ * A 440-character chunk timed out against REQUEST_TIMEOUT_MS in real use. At
+ * 200 the typical call is ~7.6s, so even the 3x excursion seen at 440 leaves
+ * room. Chunking for the cap rather than for the latency is what breaks.
+ */
+export const SYNTHESIS_CHUNK_CHARS = 200;
+
+/**
+ * The cap on what the textarea accepts. Bounds the number of billed requests
+ * one click can fire at 20, and the wall time at roughly two and a half
+ * minutes.
+ */
+export const MAX_TOTAL_CHARS = SYNTHESIS_CHUNK_CHARS * 20;
 
 export type SynthesisResult = { audioUrl: string };
 
