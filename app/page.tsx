@@ -30,6 +30,10 @@ export default function Home() {
   const [speed, setSpeed] = useState(1);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // Spoken to assistive tech when a clip lands. Without it the only signal
+  // that anything happened is an audio player appearing, which is invisible
+  // to a screen reader until the user goes looking for it.
+  const [announcement, setAnnouncement] = useState('');
   const [joinedUrl, setJoinedUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -74,6 +78,7 @@ export default function Home() {
     setError(null);
     setAudioUrl(null);
     setJoinedUrl(null);
+    setAnnouncement('');
     setProgress({ done: 0, total: chunks.length });
 
     try {
@@ -107,7 +112,12 @@ export default function Home() {
         setProgress({ done: index + 1, total: chunks.length });
       }
 
-      const { blob } = concatWav(clips);
+      const { blob, totalSeconds } = concatWav(clips);
+      const seconds = Math.max(1, Math.round(totalSeconds));
+      setAnnouncement(
+        `Ready: ${seconds} second${seconds === 1 ? '' : 's'} of audio` +
+          `${chunks.length > 1 ? ` joined from ${chunks.length} parts` : ''}. Playing now.`,
+      );
       setJoinedUrl(URL.createObjectURL(blob));
       setAudioUrl(URL.createObjectURL(blob));
       // The <audio> element is keyed on the URL, so it remounts; play once the
@@ -140,6 +150,13 @@ export default function Home() {
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-5 py-12 sm:py-16">
+      {/* Status for assistive tech only. Errors have their own role="alert";
+          this carries the quieter "it worked" that a sighted user reads off
+          the player appearing. */}
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
+
       <header className="flex flex-col gap-2">
         <p className="font-mono text-xs uppercase tracking-[0.14em] text-neutral-500 dark:text-neutral-400">
           Qwen3-TTS · prototype
@@ -162,6 +179,9 @@ export default function Home() {
           onChange={(event) => setText(event.target.value)}
           rows={4}
           spellCheck={false}
+          lang="wuu"
+          aria-describedby="text-count"
+          aria-invalid={over}
           className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3.5 py-3 text-lg leading-relaxed outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20 dark:border-neutral-700 dark:bg-neutral-900"
           placeholder="侬好"
         />
@@ -172,19 +192,23 @@ export default function Home() {
           </p>
         )}
         <div className="flex items-baseline justify-between gap-3 text-xs">
-          <div className="flex flex-wrap gap-1.5">
+          {/* min-h-11 on the chips rather than padding alone: 44px is the
+              smallest reliable touch target, and these were 26px tall. */}
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Example phrases that test tone sandhi">
             {SANDHI_PROBES.map((phrase) => (
               <button
                 key={phrase}
                 type="button"
+                lang="wuu"
                 onClick={() => setText(phrase)}
-                className="rounded-full border border-neutral-300 px-2.5 py-1 text-neutral-600 transition hover:border-emerald-600 hover:text-emerald-700 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-emerald-500 dark:hover:text-emerald-400"
+                className="inline-flex min-h-11 items-center rounded-full border border-neutral-300 px-3 text-neutral-600 transition hover:border-emerald-600 hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-emerald-500 dark:hover:text-emerald-400"
               >
                 {phrase}
               </button>
             ))}
           </div>
           <span
+            id="text-count"
             className={`shrink-0 font-mono tabular-nums ${
               over ? 'text-red-600 dark:text-red-400' : 'text-neutral-500 dark:text-neutral-400'
             }`}
@@ -206,7 +230,7 @@ export default function Home() {
           className="w-full rounded-lg border border-neutral-300 bg-white px-3.5 py-2.5 outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20 dark:border-neutral-700 dark:bg-neutral-900"
         >
           {VOICES.map((v) => (
-            <option key={v.id} value={v.id}>
+            <option key={v.id} value={v.id} lang={v.id === 'Jada' ? 'wuu' : 'zh-Hans'}>
               {v.native} — {v.variety}
             </option>
           ))}
@@ -235,7 +259,9 @@ export default function Home() {
           step={0.05}
           value={speed}
           onChange={(event) => setSpeed(Number(event.target.value))}
-          className="w-full accent-emerald-700 dark:accent-emerald-500"
+          // Without this a screen reader announces the bare number "1.25".
+          aria-valuetext={`${speed.toFixed(2)} times normal speed`}
+          className="h-11 w-full accent-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 dark:accent-emerald-500"
         />
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
           Applied on playback, so it changes the current clip instantly and costs nothing.
@@ -269,7 +295,7 @@ export default function Home() {
             className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800"
           >
             <div
-              className="h-full rounded-full bg-emerald-700 transition-[width] duration-300 dark:bg-emerald-500"
+              className="h-full rounded-full bg-emerald-700 transition-[width] duration-300 motion-reduce:transition-none dark:bg-emerald-500"
               style={{ width: `${(progress.done / progress.total) * 100}%` }}
             />
           </div>
@@ -293,7 +319,7 @@ export default function Home() {
           {/* Keyed so a new clip replaces the element rather than reusing a
               stale buffered source. */}
           <audio key={audioUrl} ref={audioRef} controls src={audioUrl} className="w-full" />
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
               {chunkCount > 1 ? `Joined from ${chunkCount} parts.` : 'Synthesised just now.'}
             </p>
@@ -301,7 +327,7 @@ export default function Home() {
               type="button"
               onClick={download}
               disabled={downloading}
-              className="shrink-0 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium transition hover:border-emerald-600 hover:text-emerald-700 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-emerald-500 dark:hover:text-emerald-400"
+              className="inline-flex min-h-11 shrink-0 items-center rounded-lg border border-neutral-300 px-3 text-xs font-medium transition hover:border-emerald-600 hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-40 dark:border-neutral-700 dark:hover:border-emerald-500 dark:hover:text-emerald-400"
             >
               {downloading ? 'Saving…' : 'Download WAV'}
             </button>

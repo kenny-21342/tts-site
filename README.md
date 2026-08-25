@@ -121,6 +121,25 @@ Requests go one at a time, not in parallel: a partial failure is far easier to
 report in order ("Part 2 of 7 failed"), and firing twenty at once is a good way
 to meet a rate limit.
 
+## Accessibility
+
+The document is `lang="en"` because the interface is English; the Chinese
+content inside it is marked where it appears, with `lang="wuu"` — Wu Chinese —
+on the Shanghainese, since that is what the voice actually speaks. This started
+as a bug: the page declared itself `zh-Hans`, so a screen reader read the whole
+English UI in a Mandarin voice.
+
+Errors announce through `role="alert"`; success announces through a visually
+hidden `aria-live` region, because otherwise the only signal that anything
+happened is an audio player appearing, which a screen reader user has no reason
+to go looking for. The speed slider carries an `aria-valuetext` so it reads
+"1.25 times normal speed" rather than "1.25". Every control is at least 44px
+tall — the phrase chips were 26px. The progress bar honours
+`prefers-reduced-motion`.
+
+Verified at a 320px layout width with a clip loaded: no horizontal overflow,
+and no control under 44px.
+
 ## Deployment
 
 Not deployed. Vercel Deployment Protection cannot keep this private on a Hobby
