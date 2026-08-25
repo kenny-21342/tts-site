@@ -140,6 +140,31 @@ tall — the phrase chips were 26px. The progress bar honours
 Verified at a 320px layout width with a clip loaded: no horizontal overflow,
 and no control under 44px.
 
+## Limits on the endpoint
+
+`/api/tts` is unauthenticated and every call costs money, so the budget is
+counted in **characters**, not requests — a hundred one-word calls cost less
+than one long one, and only characters reflect that. A request floor sits under
+it so tiny calls still hit a ceiling. Defaults are 20,000 characters and 120
+requests per IP per hour, overridable via `TTS_CHAR_BUDGET`,
+`TTS_REQUEST_BUDGET` and `TTS_WINDOW_MS`.
+
+A refused request costs nothing: the limiter runs after validation and before
+synthesis, and a refusal does not consume budget.
+
+A caller whose address cannot be established is **refused**, not exempted —
+an unattributable caller cannot be rate limited at all.
+
+Cross-origin POSTs are rejected. That is not a security boundary (Origin is
+trivially forged outside a browser, and the rate limit is what actually holds)
+but it stops someone embedding this synthesise button in their own page and
+billing us for their traffic.
+
+**The store is in-process**, so on serverless the effective limit is the budget
+times the number of warm instances. Deploying wants a shared store — Upstash or
+Vercel KV — behind the same `check` interface. That, plus a spend alert in the
+Aliyun console, is what still stands between this and a public URL.
+
 ## Deployment
 
 Not deployed. Vercel Deployment Protection cannot keep this private on a Hobby

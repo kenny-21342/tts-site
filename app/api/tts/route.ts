@@ -1,5 +1,6 @@
 import { MAX_INPUT_CHARS, SynthesisError, synthesize } from '@/lib/qwen-tts';
 import { DEFAULT_VOICE, isKnownVoice } from '@/lib/voices';
+import { clientIp, RateLimiter } from '@/lib/rate-limit';
 
 /**
  * POST /api/tts — synthesise one utterance.
@@ -8,13 +9,40 @@ import { DEFAULT_VOICE, isKnownVoice } from '@/lib/voices';
  * audio URL, which is scoped to that one clip and expires on its own.
  */
 
+/**
+ * Module scope, so the buckets survive between requests on one instance.
+ * See lib/rate-limit.ts on why this is not enough once there are several.
+ */
+const limiter = new RateLimiter();
+
 type Payload = { text?: unknown; voice?: unknown };
+
+/**
+ * Reject requests that did not come from this site's own page.
+ *
+ * This is not a security boundary — Origin is trivially forged outside a
+ * browser — but it is the difference between "someone deliberately abused the
+ * endpoint" and "someone embedded our synthesise button in their page and we
+ * paid for their traffic". Same-origin requests from our own client send an
+ * Origin header on POST; anything from another site is refused.
+ */
+function originAllowed(request: Request): boolean {
+  const origin = request.headers.get('origin');
+  if (!origin) return true; // curl, server-to-server: the rate limit covers these.
+  try {
+    return new URL(origin).host === new URL(request.url).host;
+  } catch {
+    return false;
+  }
+}
 
 function bad(message: string, status: number) {
   return Response.json({ error: message }, { status });
 }
 
 export async function POST(request: Request) {
+  if (!originAllowed(request)) return bad('Requests from other sites are not accepted.', 403);
+
   let payload: Payload;
   try {
     payload = (await request.json()) as Payload;
@@ -34,6 +62,29 @@ export async function POST(request: Request) {
   // Allowlist rather than pass-through — the voice string reaches a paid
   // upstream, and an unknown value should fail here, not there.
   const voice = isKnownVoice(payload.voice) ? payload.voice : DEFAULT_VOICE;
+
+  // Charged before synthesis, and only once the text is known to be valid, so
+  // a malformed request cannot burn someone's budget.
+  const ip = clientIp(request.headers);
+  if (!ip) {
+    // Fail closed: an unattributable caller cannot be rate limited, and this
+    // endpoint spends money on every call.
+    console.error('[api/tts] refusing a request with no attributable address');
+    return bad('Could not identify the caller.', 400);
+  }
+
+  const limit = limiter.check(ip, text.length);
+  if (!limit.allowed) {
+    return Response.json(
+      {
+        error:
+          limit.reason === 'chars'
+            ? 'You have used this hour\'s synthesis allowance. Try again shortly.'
+            : 'Too many requests. Try again shortly.',
+      },
+      { status: 429, headers: { 'retry-after': String(limit.retryAfterSeconds) } },
+    );
+  }
 
   try {
     const { audioUrl } = await synthesize(text, voice);
