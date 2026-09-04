@@ -160,18 +160,38 @@ trivially forged outside a browser, and the rate limit is what actually holds)
 but it stops someone embedding this synthesise button in their own page and
 billing us for their traffic.
 
-**The store is in-process**, so on serverless the effective limit is the budget
-times the number of warm instances. Deploying wants a shared store — Upstash or
-Vercel KV — behind the same `check` interface. That, plus a spend alert in the
-Aliyun console, is what still stands between this and a public URL.
+**The store is shared when it can be.** Set `UPSTASH_REDIS_REST_URL` and
+`UPSTASH_REDIS_REST_TOKEN` and the budget is counted in Redis, atomically, in
+one `EVAL` — so it holds across every warm instance. Leave them unset and the
+same interface counts in-process, which is right for local work and wrong for a
+public deployment, where the effective limit would be the budget times however
+many instances happen to be warm.
+
+If the shared store is unreachable the limiter degrades to per-instance
+counting rather than refusing every request or allowing every request. The
+weaker guarantee is deliberate: an outage in the cache should not take the site
+down, and it should not leave the bill unguarded either.
 
 ## Deployment
 
-Not deployed. Vercel Deployment Protection cannot keep this private on a Hobby
-plan: every project gets a public production `.vercel.app` alias, a new
-project's first deployment is always production, and the API rejects
-`ssoProtection: all` with *"Vercel Authentication is not available on your plan
-for production deployments"*. Since `/api/tts` is unauthenticated and every call
-costs money, a public URL needs the rate limit from the P2 hardening task first.
+Not yet deployed, and one decision away from being deployable.
 
-Run it locally until then.
+Vercel Deployment Protection cannot keep this private on a Hobby plan: every
+project gets a public production `.vercel.app` alias, a new project's first
+deployment is always production, and the API rejects `ssoProtection: all` with
+*"Vercel Authentication is not available on your plan for production
+deployments"*. So the production URL will be public, and `/api/tts` is
+unauthenticated and spends real money on every call.
+
+What that means in practice, now that the shared limiter exists:
+
+1. `vercel link`, then `vercel integration add upstash` — this provisions the
+   Redis and sets both `UPSTASH_REDIS_REST_*` variables on the project.
+2. `vercel env add DASHSCOPE_API_KEY production` — paste the key at the prompt
+   so it never lands in a shell history or a transcript.
+3. Set a **spend alert in the Aliyun console** before the first public request.
+   The rate limit caps what one address can spend; only the alert tells you
+   when the total is wrong.
+4. `vercel --prod`.
+
+Run it locally until step 3 is done.

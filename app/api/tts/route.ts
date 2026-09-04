@@ -1,6 +1,6 @@
 import { MAX_INPUT_CHARS, SynthesisError, synthesize } from '@/lib/qwen-tts';
 import { DEFAULT_VOICE, isKnownVoice } from '@/lib/voices';
-import { clientIp, RateLimiter } from '@/lib/rate-limit';
+import { clientIp, createRateLimitStore } from '@/lib/rate-limit';
 
 /**
  * POST /api/tts — synthesise one utterance.
@@ -10,10 +10,12 @@ import { clientIp, RateLimiter } from '@/lib/rate-limit';
  */
 
 /**
- * Module scope, so the buckets survive between requests on one instance.
- * See lib/rate-limit.ts on why this is not enough once there are several.
+ * Module scope, so an in-process limiter's buckets survive between requests on
+ * one instance. With UPSTASH_REDIS_REST_URL and _TOKEN set this is instead a
+ * shared store and the count holds across every instance -- which is what a
+ * public deployment needs, since the budget being protected is a real bill.
  */
-const limiter = new RateLimiter();
+const limiter = createRateLimitStore();
 
 type Payload = { text?: unknown; voice?: unknown };
 
@@ -73,7 +75,7 @@ export async function POST(request: Request) {
     return bad('Could not identify the caller.', 400);
   }
 
-  const limit = limiter.check(ip, text.length);
+  const limit = await limiter.consume(ip, text.length);
   if (!limit.allowed) {
     return Response.json(
       {
