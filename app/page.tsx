@@ -23,6 +23,9 @@ const SANDHI_PROBES = [
 
 export default function Home() {
   const [text, setText] = useState('阿拉是上海人');
+  const [rewritten, setRewritten] = useState<string | null>(null);
+  const [rewriting, setRewriting] = useState(false);
+  const rewriteController = useRef<AbortController | null>(null);
   const [voice, setVoice] = useState(DEFAULT_VOICE);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,9 +56,63 @@ export default function Home() {
     audio.preservesPitch = true;
   }, [speed, audioUrl]);
 
-  const over = text.length > MAX_TOTAL_CHARS;
-  const chunkCount = splitForSynthesis(text, SYNTHESIS_CHUNK_CHARS).length;
+  const spokenText = rewritten ?? text;
+  const sourceOver = text.length > MAX_TOTAL_CHARS;
+  const over = spokenText.length > MAX_TOTAL_CHARS;
+  const chunkCount = splitForSynthesis(spokenText, SYNTHESIS_CHUNK_CHARS).length;
   const selected = VOICES.find((v) => v.id === voice);
+
+  function clearAudio() {
+    setAudioUrl(null);
+    setJoinedUrl(null);
+    setProgress(null);
+    setAnnouncement('');
+  }
+
+  function changeSource(value: string) {
+    rewriteController.current?.abort();
+    rewriteController.current = null;
+    setRewriting(false);
+    setText(value);
+    setRewritten(null);
+    clearAudio();
+  }
+
+  async function suggestWording() {
+    const input = text.trim();
+    if (!input || sourceOver || rewriting) return;
+
+    const controller = new AbortController();
+    rewriteController.current = controller;
+    setRewriting(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/rewrite', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: input }),
+        signal: controller.signal,
+      });
+      const body = (await response.json()) as { rewritten?: string; error?: string };
+      if (rewriteController.current !== controller) return;
+      if (!response.ok || !body.rewritten) {
+        setError(body.error ?? 'Could not suggest wording.');
+        return;
+      }
+      setRewritten(body.rewritten);
+      clearAudio();
+      setAnnouncement('Shanghainese wording is ready to review.');
+    } catch (caught) {
+      if (rewriteController.current === controller && !(caught instanceof Error && caught.name === 'AbortError')) {
+        setError('Could not reach the rewrite service.');
+      }
+    } finally {
+      if (rewriteController.current === controller) {
+        rewriteController.current = null;
+        setRewriting(false);
+      }
+    }
+  }
 
   /**
    * Synthesise, in as many requests as the text needs.
@@ -71,7 +128,7 @@ export default function Home() {
    * order.
    */
   async function speak() {
-    const chunks = splitForSynthesis(text, SYNTHESIS_CHUNK_CHARS);
+    const chunks = splitForSynthesis(spokenText, SYNTHESIS_CHUNK_CHARS);
     if (chunks.length === 0) return;
 
     setLoading(true);
@@ -141,7 +198,7 @@ export default function Home() {
     try {
       const anchor = document.createElement('a');
       anchor.href = joinedUrl;
-      anchor.download = `${voice}-${text.slice(0, 12)}.wav`;
+      anchor.download = `${voice}-${spokenText.slice(0, 12)}.wav`;
       anchor.click();
     } finally {
       setDownloading(false);
@@ -176,16 +233,16 @@ export default function Home() {
         <textarea
           id="text"
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => changeSource(event.target.value)}
           rows={4}
           spellCheck={false}
           lang="wuu"
           aria-describedby="text-count"
-          aria-invalid={over}
+          aria-invalid={sourceOver}
           className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3.5 py-3 text-lg leading-relaxed outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20 dark:border-neutral-700 dark:bg-neutral-900"
           placeholder="侬好"
         />
-        {over && (
+        {sourceOver && (
           <p className="text-xs text-red-600 dark:text-red-400">
             Too long by {text.length - MAX_TOTAL_CHARS} characters. The cap exists because each part
             is a separate billed request.
@@ -200,7 +257,7 @@ export default function Home() {
                 key={phrase}
                 type="button"
                 lang="wuu"
-                onClick={() => setText(phrase)}
+                onClick={() => changeSource(phrase)}
                 className="inline-flex min-h-11 items-center rounded-full border border-neutral-300 px-3 text-neutral-600 transition hover:border-emerald-600 hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-emerald-500 dark:hover:text-emerald-400"
               >
                 {phrase}
@@ -210,13 +267,60 @@ export default function Home() {
           <span
             id="text-count"
             className={`shrink-0 font-mono tabular-nums ${
-              over ? 'text-red-600 dark:text-red-400' : 'text-neutral-500 dark:text-neutral-400'
+              sourceOver ? 'text-red-600 dark:text-red-400' : 'text-neutral-500 dark:text-neutral-400'
             }`}
           >
             {text.length}/{MAX_TOTAL_CHARS}
-            {chunkCount > 1 && ` · ${chunkCount} parts`}
           </span>
         </div>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-medium">Shanghainese wording</h2>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              AI suggestions can be wrong. Check local words before speaking.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={suggestWording}
+            disabled={loading || rewriting || sourceOver || !text.trim()}
+            className="inline-flex min-h-11 items-center rounded-lg border border-neutral-300 px-3 text-sm font-medium transition hover:border-emerald-600 hover:text-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:hover:border-emerald-500 dark:hover:text-emerald-400"
+          >
+            {rewriting ? 'Suggesting…' : rewritten === null ? 'Suggest wording' : 'Suggest again'}
+          </button>
+        </div>
+        {rewritten !== null && (
+          <>
+            <label htmlFor="rewritten" className="text-xs font-medium">Suggested text · editable · used by Speak</label>
+            <textarea
+              id="rewritten"
+              value={rewritten}
+              onChange={(event) => { setRewritten(event.target.value); clearAudio(); }}
+              rows={4}
+              spellCheck={false}
+              lang="wuu"
+              aria-invalid={over}
+              aria-describedby="rewritten-count"
+              className="w-full resize-y rounded-lg border border-neutral-300 bg-white px-3.5 py-3 text-lg leading-relaxed outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20 dark:border-neutral-700 dark:bg-neutral-900"
+            />
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() => { setRewritten(null); clearAudio(); }}
+                className="min-h-11 text-neutral-600 underline underline-offset-2 hover:text-emerald-700 dark:text-neutral-400 dark:hover:text-emerald-400"
+              >
+                Use original text
+              </button>
+              <span id="rewritten-count" className={over ? 'text-red-600 dark:text-red-400' : 'text-neutral-500 dark:text-neutral-400'}>
+                {rewritten.length}/{MAX_TOTAL_CHARS}{chunkCount > 1 && ` · ${chunkCount} parts`}
+              </span>
+            </div>
+            {over && <p className="text-xs text-red-600 dark:text-red-400">Suggested text exceeds the synthesis limit.</p>}
+          </>
+        )}
       </section>
 
       <section className="flex flex-col gap-3">
@@ -226,7 +330,7 @@ export default function Home() {
         <select
           id="voice"
           value={voice}
-          onChange={(event) => setVoice(event.target.value)}
+          onChange={(event) => { setVoice(event.target.value); clearAudio(); }}
           className="w-full rounded-lg border border-neutral-300 bg-white px-3.5 py-2.5 outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20 dark:border-neutral-700 dark:bg-neutral-900"
         >
           {VOICES.map((v) => (
@@ -272,7 +376,7 @@ export default function Home() {
       <button
         type="button"
         onClick={speak}
-        disabled={loading || over || text.trim().length === 0}
+        disabled={loading || rewriting || over || spokenText.trim().length === 0}
         className="rounded-lg bg-emerald-700 px-5 py-3 font-medium text-white transition hover:bg-emerald-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-emerald-600 dark:hover:bg-emerald-500"
       >
         {loading

@@ -95,6 +95,12 @@ export async function synthesize(text: string, voice: string): Promise<Synthesis
     });
   } catch (error) {
     const timedOut = error instanceof Error && error.name === 'TimeoutError';
+    const cause = error instanceof Error && 'cause' in error ? error.cause : undefined;
+    console.error(
+      '[qwen-tts] transport failure: %s %s',
+      error instanceof Error ? error.name : 'unknown',
+      cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : '',
+    );
     throw new SynthesisError(
       timedOut ? 'Synthesis timed out. Try shorter text.' : 'Could not reach the speech service.',
       504,

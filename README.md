@@ -21,6 +21,38 @@ npm run dev
 Without a key the UI loads and the API answers `503` with a clear message,
 rather than failing obscurely.
 
+## Shanghainese wording suggestions
+
+The **Suggest wording** button sends the complete text to an AI model
+before any TTS chunking. The result appears in an editable field;
+**Speak** uses that field until you select **Use original text** or change the
+source. This is optional because a rewrite can change the intended meaning,
+and a text model cannot repair pronunciation errors in the TTS voice.
+
+Set `AI_BASE_URL` and `AI_API_KEY` in `.env.local` to use an OpenAI-compatible
+gateway. `AI_BASE_URL` can be a `/v1` base or the full
+`/v1/chat/completions` endpoint. The default `AI_MODEL` is `gpt-5.5`;
+set `AI_MODEL=gpt-5.6-sol` if preferred. A live request through Vercel
+returned `我到学堂去。` for `我去学校。`. This provider takes priority over the
+other options below.
+
+Alternatively, set `OPENROUTER_API_KEY` in `.env.local` to enable a free API option. It
+defaults to [`openrouter/free`](https://openrouter.ai/openrouter/free/apps),
+which routes to an available free model; set `OPENROUTER_MODEL` to a specific
+free model ID if you want consistent results. OpenRouter's free plan has
+[usage limits](https://openrouter.ai/pricing/). Text entered for suggestions
+is sent to the selected provider. The key never reaches the browser.
+
+If you have a paid OpenCode Zen model, you can instead set
+`OPENCODE_ZEN_API_KEY` and `OPENCODE_ZEN_MODEL`. A live test returned 403 for
+the free model: OpenCode says its free tier can only be used inside OpenCode.
+If both keys are present, the site uses OpenRouter.
+
+`/api/rewrite` accepts at most 4000 characters, returns at most 4000, and has
+its own per-IP allowance of 20,000 input characters and 30 requests per hour.
+It uses the same optional shared Redis store as `/api/tts`, under a separate
+key prefix. Without a rewrite API key, speech from the original text still works.
+
 ## How the dialect is selected
 
 There is no dialect parameter. With Qwen3-TTS the dialect is carried by the
@@ -174,24 +206,14 @@ down, and it should not leave the bill unguarded either.
 
 ## Deployment
 
-Not yet deployed, and one decision away from being deployable.
+The linked Vercel project is `ykp-ao-study/tts-site`; the public production
+domain is https://tts.busypizza.bond. The Vercel deployment URLs require SSO.
+`vercel.json` runs functions in Hong Kong (`hkg1`),
+close to the Shanghai users and the text gateway.
 
-Vercel Deployment Protection cannot keep this private on a Hobby plan: every
-project gets a public production `.vercel.app` alias, a new project's first
-deployment is always production, and the API rejects `ssoProtection: all` with
-*"Vercel Authentication is not available on your plan for production
-deployments"*. So the production URL will be public, and `/api/tts` is
-unauthenticated and spends real money on every call.
-
-What that means in practice, now that the shared limiter exists:
-
-1. `vercel link`, then `vercel integration add upstash` — this provisions the
-   Redis and sets both `UPSTASH_REDIS_REST_*` variables on the project.
-2. `vercel env add DASHSCOPE_API_KEY production` — paste the key at the prompt
-   so it never lands in a shell history or a transcript.
-3. Set a **spend alert in the Aliyun console** before the first public request.
-   The rate limit caps what one address can spend; only the alert tells you
-   when the total is wrong.
-4. `vercel --prod`.
-
-Run it locally until step 3 is done.
+Production needs `DASHSCOPE_API_KEY`, `AI_BASE_URL`, `AI_API_KEY`, and
+`AI_MODEL=gpt-5.5`. It also has `UPSTASH_REDIS_REST_URL` and
+`UPSTASH_REDIS_REST_TOKEN` so both `/api/tts` and `/api/rewrite` use a shared
+rate limit. Set a spend alert in the Aliyun console: the per-IP limit cannot
+bound total spending across all callers. Deploy with `vercel deploy --prod` and
+verify both API routes after each release.

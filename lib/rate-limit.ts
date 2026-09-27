@@ -266,9 +266,10 @@ export class UpstashStore implements RateLimitStore {
 export function createRateLimitStore(
   env: Record<string, string | undefined> = process.env,
   config: RateLimitConfig = DEFAULT_LIMIT,
+  prefix = 'tts:rl:',
 ): RateLimitStore {
   const url = env.UPSTASH_REDIS_REST_URL;
   const token = env.UPSTASH_REDIS_REST_TOKEN;
-  if (url && token) return new UpstashStore({ url, token, config });
+  if (url && token) return new UpstashStore({ url, token, config, prefix });
   return new RateLimiter(config);
 }
